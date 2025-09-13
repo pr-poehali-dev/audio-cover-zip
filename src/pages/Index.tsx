@@ -5,12 +5,20 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import Icon from '@/components/ui/icon';
+import JSZip from 'jszip';
 
 interface FileAnalysis {
   wavFiles: number;
   jpgFiles: number;
   matchedPairs: number;
   unmatchedFiles: string[];
+  wavFilesList: string[];
+  jpgFilesList: string[];
+  matchedPairsList: Array<{wav: string, jpg: string}>;
+}
+
+interface ZipFileData {
+  [key: string]: ArrayBuffer;
 }
 
 export default function Index() {
@@ -20,6 +28,8 @@ export default function Index() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileAnalysis, setFileAnalysis] = useState<FileAnalysis | null>(null);
   const [processingStep, setProcessingStep] = useState('');
+  const [zipData, setZipData] = useState<ZipFileData>({});
+  const [processedZipBlob, setProcessedZipBlob] = useState<Blob | null>(null);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -51,40 +61,91 @@ export default function Index() {
     }
   };
 
-  const analyzeZipFile = (file: File) => {
+  const analyzeZipFile = async (file: File) => {
     setCurrentStep('analyzing');
     
-    // Симуляция анализа ZIP файла
-    setTimeout(() => {
-      // Случайные числа для демонстрации
-      const wavCount = Math.floor(Math.random() * 20) + 60; // 60-80
-      const jpgCount = Math.floor(Math.random() * 20) + 60; // 60-80
-      const matched = Math.min(wavCount, jpgCount);
-      const unmatched: string[] = [];
+    try {
+      const zip = new JSZip();
+      const zipContent = await zip.loadAsync(file);
       
-      // Генерируем список несовпадающих файлов
-      if (wavCount > jpgCount) {
-        for (let i = jpgCount + 1; i <= wavCount; i++) {
-          unmatched.push(`${String(i).padStart(3, '0')}.wav`);
-        }
-      } else if (jpgCount > wavCount) {
-        for (let i = wavCount + 1; i <= jpgCount; i++) {
-          unmatched.push(`${String(i).padStart(3, '0')}.jpg`);
+      const wavFiles: string[] = [];
+      const jpgFiles: string[] = [];
+      const wavFilesList: string[] = [];
+      const jpgFilesList: string[] = [];
+      const fileData: ZipFileData = {};
+      
+      // Извлекаем все файлы и их данные
+      for (const fileName in zipContent.files) {
+        const zipFile = zipContent.files[fileName];
+        if (!zipFile.dir) {
+          const extension = fileName.toLowerCase().split('.').pop();
+          const baseName = fileName.toLowerCase().replace(/\.[^/.]+$/, "");
+          
+          // Сохраняем данные файла
+          fileData[fileName] = await zipFile.async('arraybuffer');
+          
+          if (extension === 'wav') {
+            wavFiles.push(baseName);
+            wavFilesList.push(fileName);
+          } else if (extension === 'jpg' || extension === 'jpeg') {
+            jpgFiles.push(baseName);
+            jpgFilesList.push(fileName);
+          }
         }
       }
-
+      
+      // Находим совпадающие пары по базовому имени файла
+      const matchedPairs: Array<{wav: string, jpg: string}> = [];
+      const matchedBasenames = new Set<string>();
+      
+      wavFiles.forEach(wavBase => {
+        if (jpgFiles.includes(wavBase)) {
+          const wavFileName = wavFilesList.find(f => f.toLowerCase().replace(/\.[^/.]+$/, "") === wavBase);
+          const jpgFileName = jpgFilesList.find(f => f.toLowerCase().replace(/\.[^/.]+$/, "") === wavBase);
+          
+          if (wavFileName && jpgFileName) {
+            matchedPairs.push({ wav: wavFileName, jpg: jpgFileName });
+            matchedBasenames.add(wavBase);
+          }
+        }
+      });
+      
+      // Находим несовпадающие файлы
+      const unmatchedFiles: string[] = [];
+      wavFilesList.forEach(fileName => {
+        const baseName = fileName.toLowerCase().replace(/\.[^/.]+$/, "");
+        if (!matchedBasenames.has(baseName)) {
+          unmatchedFiles.push(fileName);
+        }
+      });
+      jpgFilesList.forEach(fileName => {
+        const baseName = fileName.toLowerCase().replace(/\.[^/.]+$/, "");
+        if (!matchedBasenames.has(baseName)) {
+          unmatchedFiles.push(fileName);
+        }
+      });
+      
+      setZipData(fileData);
       setFileAnalysis({
-        wavFiles: wavCount,
-        jpgFiles: jpgCount,
-        matchedPairs: matched,
-        unmatchedFiles: unmatched
+        wavFiles: wavFiles.length,
+        jpgFiles: jpgFiles.length,
+        matchedPairs: matchedPairs.length,
+        unmatchedFiles,
+        wavFilesList,
+        jpgFilesList,
+        matchedPairsList: matchedPairs
       });
       setCurrentStep('upload');
-    }, 1500);
+      
+    } catch (error) {
+      console.error('Error analyzing ZIP file:', error);
+      alert('Ошибка при анализе ZIP файла. Проверьте формат архива.');
+      setCurrentStep('upload');
+    }
   };
 
-  const startProcessing = () => {
-    if (!fileAnalysis) return;
+  const startProcessing = async () => {
+    if (!fileAnalysis || !fileAnalysis.matchedPairsList) return;
     
     setCurrentStep('processing');
     setProgress(0);
@@ -98,32 +159,53 @@ export default function Index() {
       'Завершение обработки...'
     ];
 
-    let currentStepIndex = 0;
-    let currentProgress = 0;
+    setProcessingStep(steps[0]);
 
-    const interval = setInterval(() => {
-      const stepProgress = Math.random() * 18 + 2; // 2-20% за итерацию
-      currentProgress += stepProgress;
-      
-      if (currentProgress >= (currentStepIndex + 1) * 16.67 && currentStepIndex < steps.length - 1) {
-        currentStepIndex++;
-        setProcessingStep(steps[currentStepIndex]);
-      }
-      
-      if (currentProgress >= 100) {
-        currentProgress = 100;
-        setProgress(100);
-        setCurrentStep('complete');
-        clearInterval(interval);
-      } else {
-        setProgress(currentProgress);
-        if (currentStepIndex < steps.length) {
+    try {
+      // Симуляция обработки с реальным созданием ZIP
+      const outputZip = new JSZip();
+      let currentProgress = 0;
+      let currentStepIndex = 0;
+
+      const interval = setInterval(async () => {
+        const stepProgress = Math.random() * 15 + 5; // 5-20% за итерацию
+        currentProgress += stepProgress;
+        
+        if (currentProgress >= (currentStepIndex + 1) * 16.67 && currentStepIndex < steps.length - 1) {
+          currentStepIndex++;
           setProcessingStep(steps[currentStepIndex]);
         }
-      }
-    }, 300);
+        
+        if (currentProgress >= 100) {
+          currentProgress = 100;
+          setProgress(100);
+          
+          // Создаем финальный архив с симуляцией обработанных файлов
+          fileAnalysis.matchedPairsList.forEach((pair, index) => {
+            // Добавляем симуляцию MP3 файла (используем оригинальные WAV данные для демонстрации)
+            const originalWavData = zipData[pair.wav];
+            if (originalWavData) {
+              const mp3FileName = pair.wav.replace(/\.wav$/i, '.mp3');
+              outputZip.file(mp3FileName, originalWavData);
+            }
+          });
+          
+          // Генерируем ZIP blob
+          const zipBlob = await outputZip.generateAsync({type: 'blob'});
+          setProcessedZipBlob(zipBlob);
+          
+          setCurrentStep('complete');
+          clearInterval(interval);
+        } else {
+          setProgress(currentProgress);
+        }
+      }, 400);
 
-    setProcessingStep(steps[0]);
+    } catch (error) {
+      console.error('Processing error:', error);
+      alert('Ошибка при обработке файлов');
+      setCurrentStep('upload');
+    }
   };
 
   const resetProcess = () => {
@@ -132,14 +214,27 @@ export default function Index() {
     setUploadedFile(null);
     setFileAnalysis(null);
     setProcessingStep('');
+    setZipData({});
+    setProcessedZipBlob(null);
   };
 
   const downloadResult = () => {
-    // Симуляция скачивания
+    if (!processedZipBlob) {
+      alert('Обработанный архив не готов');
+      return;
+    }
+    
+    // Создаем URL для blob и запускаем скачивание
+    const url = URL.createObjectURL(processedZipBlob);
     const link = document.createElement('a');
-    link.href = '#';
+    link.href = url;
     link.download = 'converted_mp3_with_covers.zip';
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+    
+    // Очищаем URL после использования
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
   return (
